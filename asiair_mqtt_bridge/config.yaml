@@ -1,0 +1,37 @@
+name: "ASIAIR MQTT Bridge"
+description: "ASIAIR monitoring and optional camera control bridge for Home Assistant MQTT Discovery"
+version: "0.1.20"
+slug: "asiair_mqtt_bridge"
+startup: application
+boot: auto
+init: false
+arch:
+  - amd64
+  - aarch64
+  - armv7
+services:
+  - mqtt:need
+map:
+  - share:rw
+options:
+  devices:
+    - id: "asiair_1"
+      name: "ASIAIR Observatory"
+      host: "192.168.1.100"
+  poll_interval: 30
+  keepalive_interval: 8
+  topic_prefix: "asiair"
+  discovery_prefix: "homeassistant"
+  allow_control: false
+  log_level: "INFO"
+schema:
+  devices:
+    - id: str
+      name: str
+      host: str
+  poll_interval: int(5,300)
+  keepalive_interval: int(3,60)
+  topic_prefix: str
+  discovery_prefix: str
+  allow_control: bool
+  log_level: list(DEBUG|INFO|WARNING|ERROR)
