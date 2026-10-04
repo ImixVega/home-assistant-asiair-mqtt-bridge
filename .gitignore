@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+*.pem
+*.key
+*.apk
+.env
+.DS_Store
