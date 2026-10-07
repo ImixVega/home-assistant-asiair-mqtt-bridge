@@ -144,4 +144,8 @@ Use at your own risk. Test controls locally before relying on them for unattende
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+Copyright (C) 2026 ImixVega and contributors.
+
+This project is licensed under the **GNU General Public License v3.0 or later (GPL-3.0-or-later)**. You may use, modify and redistribute it under the terms of the GPL. See [`LICENSE`](LICENSE).
+
+`SPDX-License-Identifier: GPL-3.0-or-later`
