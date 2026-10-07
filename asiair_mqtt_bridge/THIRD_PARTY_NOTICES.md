@@ -8,4 +8,8 @@ Protocol behavior and implementation ideas were cross-checked against:
 - `StefanDorresteijn/asiair-dashboard` (MIT), particularly its ASIAIR protocol documentation.
 - `irjudson/seestar-api`, particularly the documented current ZWO 4700 verification handshake and RSA public key.
 
+Runtime dependency:
+
+- `paho-mqtt` 2.1.0 — dual-licensed under EPL-2.0 or Eclipse Distribution License 1.0 (EDL-1.0); used as the MQTT client library.
+
 ZWO and ASIAIR are trademarks of their respective owner. This project is not an official ZWO product.
