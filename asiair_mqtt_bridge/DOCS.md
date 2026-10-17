@@ -1,6 +1,4 @@
-# ASIAIR MQTT Bridge 0.1.20
-
-> **Development status:** v0.1.20 is an experimental, incomplete implementation. Many functions work, but the project still needs wider hardware/firmware testing. EAF “Set current position” is currently known to be unreliable.
+# ASIAIR MQTT Bridge 0.1.26
 
 The add-on connects to ASIAIR TCP 4700 (imager) and TCP 4400 (mount/guider) and publishes Home Assistant entities through MQTT Discovery.
 
@@ -68,15 +66,15 @@ It also updates Home Assistant device metadata with the EAF model, serial number
 
 ```yaml
 devices:
-  - id: asiair_1
-    name: ASIAIR Observatory
+  - id: ed80_asi2600
+    name: ASIAIR_1_PRO
     host: 192.168.1.100
 poll_interval: 30
 keepalive_interval: 8
 topic_prefix: asiair
 discovery_prefix: homeassistant
-allow_control: false
-log_level: INFO
+allow_control: true
+log_level: DEBUG
 ```
 
 For normal operation, use `log_level: INFO` after testing.
@@ -114,6 +112,64 @@ The command is sent on TCP 4400 as `scope_set_track_state [true/false]`.
 The bridge does not assume success from the write alone; it immediately follows
 with `scope_get_track_state` and publishes the confirmed state back to Home
 Assistant.
+
+
+## End-of-night controls (v0.1.26)
+
+This version uses **RPCs captured from the official ASIAIR app**, rather than
+speculative generic commands. Set `allow_control: true` to expose the buttons.
+
+| HA device | Control | TCP | ASIAIR method | Params |
+|---|---|---|---|---|
+| Autorun | Start / Resume active Autorun | 4700 | `start_exposure` | `["light", false]` |
+| Autorun | Pause active Autorun / Plan | 4700 | `stop_exposure` | `[true]` |
+| Plan | Start / Resume active Plan | 4700 | `start_exposure` | `["light", false]` |
+| Plan | Pause active Plan | 4700 | `stop_exposure` | `[true]` |
+| Mount | Go Home Position | 4400 | `scope_park` | *omitted* |
+| Mount | Tracking | 4400 | `scope_set_track_state` | `[true]` or `[false]` |
+
+**Important: mode selection.** The Start/Resume and Pause RPCs are the same in
+both screens. They act on the capture job selected in the *ASIAIR app/device*.
+The Plan buttons **do not switch to Plan mode**. Select/configure the intended
+Plan (or Autorun sequence) in ASIAIR before using the HA buttons. Neither button
+rewrites `set_plan` or clears the saved sequence.
+
+**Telemetry and command acknowledgement are separate.** `Capture command
+status` is `start_requested`, `pause_requested`, `start_accepted_unconfirmed`,
+`pause_accepted_unconfirmed`, `failed`, or `rpc_timeout_unconfirmed`. It is not
+proof that exposure has started/stopped. Wait for the **Capture working** binary
+sensor to change from a fresh ASIAIR `get_app_state` read-back or relevant
+Sequence/Exposure event. On a disconnected/reconnected port 4700 the retained
+session values are invalidated to avoid using yesterday's state.
+
+**Park/home telemetry is deliberately conservative.** `scope_park` accepting
+an RPC only produces **Home state = `accepted_unconfirmed`**. Only an appropriate
+asynchronous `ScopeHome`/`ScopePark` event may mark `complete`; a failure/error
+marks `failed`. A missing RPC reply becomes `rpc_timeout_unconfirmed`; if an
+accepted park does not generate a completion event within 300 seconds the sensor
+shows `completion_timeout_unconfirmed`. The bridge does not infer "parked" from
+Tracking OFF or Slewing OFF. If the ASIAIR firmware does not emit one of those
+events, this sensor may stay unconfirmed until the timeout; do not use it as a
+completed-state automation trigger until you have observed `complete` on real
+hardware. A Go Home request is deferred while capture is
+working. It does not abort Plate Solve/AutoGoto and cannot move until fresh
+readbacks prove idle capture and a stationary mount.
+If capture state is unknown, the new deferred Go Home stays pending and cannot dispatch until two fresh idle readbacks are obtained.
+
+Suggested HA automation after manual hardware validation:
+
+1. Press **Pause active Autorun / Plan** (whichever mode is currently active).
+2. Wait with timeout for **Capture working = OFF** (no `unavailable`/`unknown`).
+3. Press **Go Home Position** (requests deferred park; the bridge sends `scope_park` only after fresh safety checks).
+4. Wait with timeout for **Home state = complete**. If a timeout/unconfirmed
+   error occurs, stop the automation and notify the operator.
+5. Only after confirmed park: check Tracking switch; send **OFF** if necessary.
+6. Check Tracking OFF readback via `scope_get_track_state`.
+
+**Physical movement warning:** Only run the first Go Home test with the mount
+under observation, cables clear, safe mechanical limits, and camera capture
+paused. The wire capture proves the command used by the app but does not yet
+prove reliable completion-event behavior on your particular mount/firmware.
 
 
 ## Storage telemetry and FITS count (v0.1.17)
@@ -164,7 +220,8 @@ DC output control uses `pi_output_set2` and preserves the last reported `type`, 
 After `pi_output_get2` succeeds, Home Assistant receives the physical ON/OFF
 state of each DC output and, when `allow_control: true`, a type select for each
 port. Supported UI labels are `Mount`, `Camera`, `Focuser`, `Dew Heater`,
-`Flat Panel`, and `Other`; `Mount` maps to the ASIAIR protocol value `telescope`.
+`Flat Panel`, and `Other`; `Mount` maps to the `telescope` type observed on the
+user's ASIAIR capture.
 
 The select state is always published from the subsequent `pi_output_get2`
 read-back. Type writes preserve `state`, `value`, and `is_pwm` and alter only
@@ -186,3 +243,81 @@ The MQTT discovery layout follows the ASIAIR app more closely:
 - **Autorun** — target, sequence state and frame progress.
 
 Restart/Shutdown and other write controls are only exposed when `allow_control: true`.
+
+
+### Autorun Pause troubleshooting
+
+`pause_requested` means the HA/MQTT button queued the control command but the TCP write is not yet confirmed. `pause_sent_waiting_reply` proves the bridge sent `stop_exposure [true]` to TCP 4700; `pause_accepted_unconfirmed` proves ASIAIR accepted the RPC but NOT that the ongoing exposure has actually stopped. `rpc_timeout_unconfirmed` or `failed` indicate missing/negative ACK. The bridge fixes a queue starvation problem during continuous incoming ASIAIR events and accepts `code: 0` acknowledgement packets without `result`. Check physical capture behavior separately. If `pause_accepted_unconfirmed` but Autorun keeps running, record INFO logs and a new ASIAIR packet capture to investigate session/page semantics.
+
+
+## v0.1.26 — Deferred Go Home request and stale event recovery
+
+**One click, safe wait:** the Mount `Go Home Position` button sends a *request*
+only. If the camera is active, `Home state = waiting_for_capture_stop` instead of
+`blocked_capture_active`. A fresh two-sample `get_app_state.capture.is_working`
+readback (at least two seconds apart) plus a fresh `scope_is_moving=false`
+mount response are required before the existing `scope_park` is dispatched.
+Known active AutoGoto/ScopeGoto events block parking while the event continues.
+Some firmware does not send their terminal event; an orphaned `working` event
+can be cleared after 30 seconds with **no new GoTo activity**, but ONLY after
+two fresh camera-idle confirmations plus a fresh stationary-mount reply. This
+is a conservative recovery for missing events, not positive proof of a Plate
+Solve / GoTo completion. An unknown/null mount motion reply does not authorize
+a park. Do not rely on unattended park until verified on your hardware.
+
+The wait period is **5 minutes**, independent of the later **5-minute park
+completion timeout**. Failure/timeout means **no park sent** and must be handled
+as an alarm rather than forced by retrying blindly.
+
+Use the new **Cancel pending Go Home** button to cancel while waiting, resulting
+in `cancelled_before_dispatch`. It does NOT reverse or stop a physical Home
+movement after `scope_park` has been dispatched. A repeated Go Home click while
+waiting is deliberately ignored (no timeout reset or duplicate motion).
+
+This bridge does **not** send `stop_exposure` when Go Home is requested. You must
+issue **Pause active Autorun / Plan** yourself, or have an HA automation do it,
+and wait for `pause_confirmed`. If ASIAIR keeps Plate Solving or AutoGoto remains
+active (and keeps emitting fresh events), Go Home can time out safely instead
+of initiating a risky movement.
+
+Tracking confirmation: after a successful `scope_set_track_state` reply, the
+bridge asks the mount channel (TCP 4400) for `scope_get_track_state` without
+a channel-variable exception or connection reset.
+
+**Status values:** `checking_safe_state`, `waiting_for_capture_stop`,
+`waiting_for_mount_idle`, `waiting_for_goto`, `requested`,
+`accepted_unconfirmed`, `working`, `complete`, `failed`,
+`cancelled_before_dispatch`, `waiting_timeout_no_park`, and explicit offline/
+RPC/completion timeout states. Do not treat any state except a new `complete`
+for the active park as confirmation of Home.
+
+## Camera control readback and safe automation
+
+On current ASIAIR firmware, `get_control_value` must use **two** positional
+arguments, e.g. `{"method":"get_control_value","params":["CoolerOn",true]}`.
+The earlier single-element form caused repeating firmware `109 / unexpected param`
+errors, about every 5 seconds. Both slow and fast polling, and manual Enter,
+now use the two-argument form. If a particular control is still unsupported,
+only that control is skipped until reconnect; the other camera readings remain active.
+
+**Capture command status:** `pause_requested` → `pause_sent_waiting_reply` →
+`pause_accepted_unconfirmed` → **`pause_confirmed`**. The corresponding resume
+status is `start_confirmed`. The final confirmation comes from a NEW
+`get_app_state.capture.is_working` response after successful RPC acceptance.
+The bridge polls readback approximately every 3 seconds while needed and reports
+`confirmation_timeout_unconfirmed` if no matching state is seen within 360 s.
+The `Capture working` binary sensor itself is still ASIAIR telemetry; it is
+not set ON/OFF optimistically on command ACK.
+
+**HA interlocks:** Automations should wait for both `Capture working: OFF`
+and `Capture command status: pause_confirmed` when a pause was issued.
+Only then press `Go Home Position`, wait for a fresh `Home state: complete`
+from the `ScopeHome` event, and only then check/change mount Tracking.
+The `blocked_capture_active` state indicates the Go Home request was **not sent**
+because capture was still reported ON.
+
+An optional, **not automatically installed** example is in
+`examples/ha_end_of_astronomical_night.yaml`. Replace all placeholder entity
+IDs for a single selected ASIAIR. It triggers at astronomical dawn
+(solar elevation rising above -18°); confirm your own preferred timing before
+activating. Test physically under supervision with mount/cables clear.

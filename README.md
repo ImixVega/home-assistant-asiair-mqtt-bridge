@@ -7,7 +7,7 @@ Unofficial Home Assistant OS add-on that connects directly to a ZWO ASIAIR on th
 
 The project is intended for people who want ASIAIR telemetry and selected controls available in Home Assistant without replacing the official ASIAIR app.
 
-## Current status — v0.1.20
+## Current status — v0.1.26
 
 What already works on supported/tested setups:
 
@@ -17,12 +17,14 @@ What already works on supported/tested setups:
 - Main Camera telemetry: state, temperature, gain, exposure, cooler, target temperature and anti-dew heater
 - EFW detection, current filter and filter selection
 - EAF telemetry, Slow/Fast step mode, `+`, `-` and AF
-- Mount telemetry and Tracking ON/OFF
+- Mount telemetry and Tracking ON/OFF with confirmed readback
+- Go Home Position (`scope_park`), deferred until independent camera/mount idle checks pass; `ScopeHome` status confirms parking completion
 - ASIAIR DC outputs where the hardware supports them, including physical ON/OFF read-back and output type selection
 - automatic capability detection so unsupported power entities are not created on hardware that does not provide them
 - storage information and FITS file count
 - experimental current-frame preview through TCP 4800
-- ASIAIR-like Home Assistant grouping: ASIAIR, Main Camera, Guide, Mount, Focuser, EFW, Files and Autorun
+- ASIAIR-like Home Assistant grouping: ASIAIR, Main Camera, Guide, Mount, Focuser, EFW, Files, Autorun and Plan
+- Autorun / active Plan Pause and Start/Resume controls using ASIAIR's observed RPCs, with fresh capture-state verification
 - optional Restart and Shutdown buttons
 
 Known limitations / work in progress:
@@ -30,6 +32,9 @@ Known limitations / work in progress:
 - **EAF “Set current position” is currently not reliable and needs more reverse-engineering/testing.**
 - FITS browsing/counting and current-frame preview are still experimental.
 - Pro / Plus / Mini handling is capability-based and needs wider testing on more hardware revisions.
+- Plan Start/Pause controls do **not** switch the active ASIAIR mode; choose the mode in the official ASIAIR application first.
+- Deferred Go Home can wait up to five minutes for confirmed inactivity; no automatic stop of the capture session occurs when pressing Go Home.
+- Hardware-confirmed Pause/Resume and Go Home do not yet establish safe unattended night-end automation for all mounts/firmware. Supervise initial trials.
 - not every ASIAIR screen, device or workflow is implemented yet.
 - the protocol is unofficial and may change with ASIAIR firmware/app updates.
 - this project has so far been tested on a limited set of equipment; reports from other setups are welcome.
@@ -41,11 +46,12 @@ The MQTT Discovery layout follows the official ASIAIR app as closely as practica
 - **ASIAIR** — name, Station Mode, Wi-Fi, diagnostics, supported DC power outputs, supply telemetry, Enter, Restart and Shutdown.
 - **Main Camera** — camera state, temperature, gain/exposure, cooler/dew controls and current-frame preview.
 - **Guide** — guiding state, SNR and RA/DEC/total errors.
-- **Mount** — coordinates, tracking and mount state.
+- **Mount** — coordinates, Tracking, Go Home Position, deferred waiting and confirmed Home state.
 - **Focuser** — EAF state and controls.
 - **EFW** — wheel state, current slot/filter and filter selection.
 - **Files** — current storage, capacity/free/used space, FITS count and latest saved file.
-- **Autorun** — target, sequence state, frame counters and progress.
+- **Autorun** — target, sequence state, frame counters and progress, Start/Resume and Pause.
+- **Plan** — Start/Resume and Pause for the mode selected in ASIAIR.
 
 ## Installation — Home Assistant OS / Supervisor
 
@@ -106,7 +112,9 @@ Write controls are disabled by default:
 allow_control: false
 ```
 
-Set `allow_control: true` only when you want Home Assistant controls such as cooler, filter wheel, focuser movement, Tracking, DC outputs, Restart or Shutdown.
+Set `allow_control: true` only when you want Home Assistant controls such as cooler, filter wheel, focuser movement, Tracking, Go Home, Autorun/Plan Start/Pause, DC outputs, Restart or Shutdown.
+
+For end-of-night shutdowns, issue Pause and wait for `pause_confirmed` before Go Home; only treat a fresh `ScopeHome: complete` as completed parking. See [`asiair_mqtt_bridge/examples/ha_end_of_astronomical_night.yaml`](asiair_mqtt_bridge/examples/ha_end_of_astronomical_night.yaml) for a supervised-test template with timeouts.
 
 Some commands can interrupt an imaging session or power connected equipment. In particular, changing a DC output type may cause ASIAIR to reconnect attached devices. Use automation around power and shutdown controls carefully.
 

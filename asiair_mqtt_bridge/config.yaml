@@ -1,6 +1,6 @@
 name: "ASIAIR MQTT Bridge"
 description: "ASIAIR monitoring and optional camera control bridge for Home Assistant MQTT Discovery"
-version: "0.1.20"
+version: "0.1.26"
 slug: "asiair_mqtt_bridge"
 startup: application
 boot: auto

@@ -1,3 +1,19 @@
+## 0.1.26 — Verified capture controls and safer Go Home
+
+This release consolidates the privately tested improvements since public v0.1.20. Intermediate development builds were not published.
+
+- **Pause / Resume** for Autorun and the currently selected Plan: observed ASIAIR RPCs `stop_exposure [true]` and `start_exposure ["light", false]` (TCP 4700). Plan selection must be made in the official app first.
+- Improved queue servicing during continuous event streams; recognize firmware success replies with `code: 0` even without a `result` field.
+- New command diagnostics and fresh `get_app_state.capture.is_working` readback before declaring `pause_confirmed` / `start_confirmed`. An accepted RPC alone does not confirm an exposure has stopped.
+- **Mount Go Home Position** uses observed `scope_park` (TCP 4400), with asynchronous `ScopeHome: working/complete` feedback. No manual timing guesswork or treating RPC ACK as arrival at Home.
+- **Deferred Go Home:** while the camera is active or mount is slewing, a single click waits for two new idle capture readings and recent `scope_is_moving=false` feedback; existing active AutoGoto/ScopeGoto blocks park. A stale working event may expire only after 30 seconds without further activity and independently verified idle readbacks. Requests time out after 300 seconds; an additional button cancels only the pending request.
+- Fix Tracking ON/OFF reply handler disconnect (`UnboundLocalError: channel`) and verify Tracking with `scope_get_track_state`.
+- Fix `get_control_value` firmware error 109: query `[control_name, true]`; skip individually unsupported controls until reconnect.
+- Add an example Home Assistant end-of-astronomical-night automation with safety checks and timeouts, plus local regression tests.
+- Keep previous device layout, DC capabilities, EFW/EAF controls and saved entity identifiers; write controls remain disabled unless `allow_control: true`.
+
+**Hardware scope:** Pause/Resume and Go Home were tested by the project maintainer on actual ASIAIR devices. Firmware compatibility and unattended automation still need wider validation. Verify the mount's motion path before enabling automation.
+
 ## 0.1.20
 
 - Reorganized Home Assistant devices to mirror ASIAIR sections: ASIAIR, Main Camera, Guide, Mount, Focuser, EFW, Files and Autorun.

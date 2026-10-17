@@ -1,0 +1,112 @@
+# OPTIONAL HOME ASSISTANT AUTOMATION TEMPLATE -- NOT INSTALLED BY THE ADD-ON.
+# Replace EVERY entity_id below with an actual entity ID for ONE ASIAIR.
+# Test under supervision with cables clear and mount limits checked.
+# Requires bridge v0.1.26, allow_control: true, and authenticated TCP 4700.
+# This automation never continues after an unconfirmed step.
+alias: "ASIAIR - Koniec nocy astronomicznej (bezpiecznie)"
+description: "Pause -> potwierdzenie -> Go Home -> ScopeHome complete -> Tracking OFF"
+mode: single
+triggers:
+  - trigger: numeric_state
+    entity_id: sun.sun
+    attribute: elevation
+    above: -18
+conditions: []
+variables:
+  pause_button: "button.REPLACE_pause_autorun"
+  capture_working: "binary_sensor.REPLACE_capture_working"
+  capture_command_status: "sensor.REPLACE_capture_command_status"
+  go_home_button: "button.REPLACE_go_home_position"
+  cancel_pending_home_button: "button.REPLACE_cancel_pending_go_home"
+  home_state: "sensor.REPLACE_home_state"
+  tracking_switch: "switch.REPLACE_mount_tracking"
+  tracking_readback: "binary_sensor.REPLACE_mount_tracking"
+actions:
+  # If capture is already confirmed stopped, no pause command is needed.
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ is_state(capture_working, 'on') }}"
+        sequence:
+          - variables:
+              pause_requested_at: "{{ now().isoformat() }}"
+          - action: button.press
+            target:
+              entity_id: "{{ pause_button }}"
+          - wait_template: >
+              {% set st = states.get(capture_command_status) %}
+              {{ st is not none and st.state == 'pause_confirmed'
+                 and as_timestamp(st.last_changed) >= as_timestamp(pause_requested_at)
+                 and is_state(capture_working, 'off') }}
+            timeout: "00:07:00"
+            continue_on_timeout: true
+  - if:
+      - condition: template
+        value_template: "{{ not is_state(capture_working, 'off') }}"
+    then:
+      - action: persistent_notification.create
+        data:
+          title: "ASIAIR: parkowanie wstrzymane"
+          message: >
+            Brak potwierdzenia zatrzymania ekspozycji. Go Home NIE wysłano.
+            Capture={{ states(capture_working) }}, RPC={{ states(capture_command_status) }}.
+      - stop: "ASIAIR capture not confirmed idle"
+        error: true
+  # v0.1.26: this requests Go Home once. The bridge independently waits for
+  # two fresh idle capture reads + stationary mount readback and then parks.
+  # A live AutoGoto can extend waiting; 300s expires safely without movement.
+  # New timestamp prevents an old retained 'complete' from passing.
+  - variables:
+      park_requested_at: "{{ now().isoformat() }}"
+  - action: button.press
+    target:
+      entity_id: "{{ go_home_button }}"
+  - wait_template: >
+      {% set st = states.get(home_state) %}
+      {{ st is not none and st.state in
+          ['complete', 'completed', 'success', 'failed', 'error',
+           'waiting_timeout_no_park', 'cancelled_before_dispatch',
+           'failed_offline_no_park', 'failed_mount_offline',
+           'failed_imager_offline', 'failed_imager_offline_no_park',
+           'failed_mount_offline_no_park', 'rpc_timeout_unconfirmed',
+           'completion_timeout_unconfirmed']
+         and as_timestamp(st.last_changed) >= as_timestamp(park_requested_at) }}
+    timeout: "00:06:00"
+    continue_on_timeout: true
+  - if:
+      - condition: template
+        value_template: "{{ not is_state(home_state, 'complete') }}"
+    then:
+      - action: persistent_notification.create
+        data:
+          title: "ASIAIR: Go Home niepotwierdzone"
+          message: >
+            Nie otrzymano nowego ScopeHome: complete. Tracking nie zostało
+            zmienione przez automatyzację. Home={{ states(home_state) }}.
+            Jeśli żądanie jeszcze oczekuje, naciśnij Cancel pending Go Home.
+      - stop: "ASIAIR mount park not confirmed complete"
+        error: true
+  # Some mounts turn Tracking OFF automatically when parked.
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ is_state(tracking_readback, 'on') }}"
+        sequence:
+          - action: switch.turn_off
+            target:
+              entity_id: "{{ tracking_switch }}"
+          - wait_template: "{{ is_state(tracking_readback, 'off') }}"
+            timeout: "00:00:30"
+            continue_on_timeout: true
+  - if:
+      - condition: template
+        value_template: "{{ not is_state(tracking_readback, 'off') }}"
+    then:
+      - action: persistent_notification.create
+        data:
+          title: "ASIAIR: tracking niepotwierdzony"
+          message: >
+            Montaż dotarł do Home, ale Tracking OFF nie zostało potwierdzone.
+            Stan={{ states(tracking_readback) }}.
+      - stop: "ASIAIR tracking OFF not confirmed"
+        error: true
